@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output (build.py / PyInstaller)
+build/
+dist/
+*.spec
+
+# Local test material (SoundFonts are usually copyrighted: do not commit them)
+*.sf2
+*.sfz
+*.xrni
+*.zip
+*.7z
+*.wav
+*.flac
