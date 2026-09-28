@@ -89,22 +89,32 @@ def _save_library(path: str) -> None:
 
 
 class ProgressLine(tk.Canvas):
-    """Thin flat progress bar."""
+    """Thin flat progress bar; ``pulse()`` shows a moving segment when the length is unknown."""
 
     def __init__(self, master: tk.Misc, height: int) -> None:
         super().__init__(master, height=height, bg=BG, highlightthickness=0)
         self._ratio = 0.0
+        self._pulse: float | None = None  # position of the moving segment, 0..1
         self.bind("<Configure>", lambda e: self._draw())
 
     def set(self, done: int, total: int) -> None:
         self._ratio = min(1.0, done / total) if total else 0.0
+        self._pulse = None
+        self._draw()
+
+    def pulse(self) -> None:
+        self._pulse = ((self._pulse or 0.0) + 0.02) % 1.0
         self._draw()
 
     def _draw(self) -> None:
         self.delete("all")
         w, h = self.winfo_width(), self.winfo_height()
         self.create_rectangle(0, 0, w, h, fill=SURFACE, width=0)
-        if self._ratio:
+        if self._pulse is not None:
+            seg = w * 0.2
+            x = (w + seg) * self._pulse - seg
+            self.create_rectangle(max(0, x), 0, min(w, x + seg), h, fill=ACCENT, width=0)
+        elif self._ratio:
             self.create_rectangle(0, 0, round(w * self._ratio), h, fill=ACCENT, width=0)
 
 
@@ -124,6 +134,12 @@ class App:
         self.t_start = self.deadline = 0.0
         self.last_root = ""
         self._collecting = 0  # file reads in progress (drops)
+        self.pending: dict[str, engine.Job] = {}  # scanned, waiting for "Convert" (dst -> job)
+        self.pending_paths: list[str] = []         # what was dropped (re-scanned if the destination changes)
+        self._notes: list[str] = []                # scan warnings shown in the status line
+        self.scan: dict | None = None              # scan progress: text, done, total, t0
+        self._scan_threads: list[threading.Thread] = []
+        self._closing = False
         self.scale = s = root.winfo_fpixels("1i") / 96
         regular, semibold, display = _fonts(root)
         self.font = (regular, FONT_SIZE)
@@ -174,8 +190,13 @@ class App:
         self.open_btn = ttk.Button(buttons, text="Open instruments folder", command=self._open_out,
                                    state="disabled")
         self.open_btn.pack(side="left")
+        self.convert_btn = ttk.Button(buttons, text="Convert", style="Accent.TButton", command=self._convert,
+                                      state="disabled")
+        self.convert_btn.pack(side="right")
         self.cancel_btn = ttk.Button(buttons, text="Cancel", command=self._cancel, state="disabled")
-        self.cancel_btn.pack(side="right")
+        self.cancel_btn.pack(side="right", padx=(0, int(10 * s)))
+        self.clear_btn = ttk.Button(buttons, text="Clear", command=self._clear, state="disabled")
+        self.clear_btn.pack(side="right", padx=(0, int(10 * s)))
 
         # Instrument list
         cols = ("preset", "folder", "samples", "size", "state")
@@ -202,6 +223,7 @@ class App:
             widget.dnd_bind("<<DropLeave>>", self._leave)
             widget.dnd_bind("<<Drop>>", self._drop)
         root.protocol("WM_DELETE_WINDOW", self._quit)
+        root.bind("<Return>", lambda e: self._convert())
         root.after(100, self._poll)
         if initial:
             root.after(300, lambda: self.add(initial))
@@ -222,6 +244,13 @@ class App:
                   foreground=[("disabled", MUTED)], bordercolor=[("disabled", SURFACE)],
                   lightcolor=[("active", SURFACE_HI), ("disabled", BG)],
                   darkcolor=[("active", SURFACE_HI), ("disabled", BG)])
+        # Primary action (Convert): accent colour, dark text.
+        style.configure("Accent.TButton", background=ACCENT, foreground=BG, bordercolor=ACCENT,
+                        lightcolor=ACCENT, darkcolor=ACCENT, focuscolor=ACCENT, font=self.font_semi)
+        style.map("Accent.TButton", background=[("disabled", BG), ("pressed", ACCENT), ("active", ACCENT_HI)],
+                  foreground=[("disabled", MUTED)], bordercolor=[("disabled", SURFACE), ("active", ACCENT_HI)],
+                  lightcolor=[("active", ACCENT_HI), ("disabled", BG)],
+                  darkcolor=[("active", ACCENT_HI), ("disabled", BG)])
         style.configure("Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=TEXT,
                         borderwidth=0, rowheight=int(30 * s), font=self.font_small)
         style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
@@ -280,54 +309,84 @@ class App:
             self.library = os.path.normpath(path)
             _save_library(self.library)
             self._show_library()
+            if self.pending_paths and not self.runner.running:  # destinations changed: scan again
+                paths = self.pending_paths
+                self._clear()
+                self.add(paths)
 
     def _show_library(self) -> None:
         self.dest_label.configure(text=_short(self.library) + os.sep + "<.sf2, folder or archive name>")
 
     # ---------------------------------------------------------------- batch
+    # Dropping only scans: the list shows what will be written, nothing is written until
+    # "Convert" is clicked (or Enter pressed).
+
     def add(self, paths: list[str]) -> None:
-        """Read the dropped files in a thread (archives can take a while to unpack)."""
-        self._collecting = getattr(self, "_collecting", 0) + 1
-        self.status.configure(text="Reading files…")
+        """Scan the dropped files in a thread (archives can take a while to unpack)."""
+        self._collecting += 1
+        if self.scan is None:
+            self.scan = {"text": "Preparing", "done": None, "total": None, "t0": time.monotonic()}
+        self._show_scan_progress()
         library = self.library
+        last = [0.0, ""]
+
+        def progress(text: str, done: int | None = None, total: int | None = None) -> None:
+            # Called from the scanning thread: stop if the window is closing, and throttle
+            # the updates to ~10 per second.
+            if self._closing:
+                raise engine.ScanCancelled()
+            now = time.monotonic()
+            if text != last[1] or now - last[0] >= 0.1 or (total and done == total):
+                last[:] = [now, text]
+                self.events.put(("scan", (text, done, total)))
 
         def work() -> None:
             try:
-                self.events.put(("collected", engine.collect_jobs(paths, library)))
+                self.events.put(("collected", (*engine.collect_jobs(paths, library, progress), paths)))
+            except engine.ScanCancelled:
+                pass
             except Exception as e:  # never leave the window waiting
-                self.events.put(("collected", ([], [(", ".join(paths), str(e))], 0)))
+                self.events.put(("collected", ([], [(", ".join(paths), str(e))], 0, paths)))
 
-        threading.Thread(target=work, daemon=True).start()
+        thread = threading.Thread(target=work, daemon=True)
+        self._scan_threads.append(thread)
+        thread.start()
 
-    def _collected(self, jobs: list, errors: list, ignored: int) -> None:
+    def _show_scan_progress(self) -> None:
+        """Status line + bar while scanning (the conversion owns them while it runs)."""
+        if self.scan is None or self.runner.running:
+            return
+        sc = self.scan
+        parts = [sc["text"]]
+        if sc["total"]:
+            parts.append(f"{100 * sc['done'] // sc['total']} %  ({_size(sc['done'])} / {_size(sc['total'])})")
+            self.progress.set(sc["done"], sc["total"])
+        else:
+            self.progress.pulse()
+        parts.append(f"{time.monotonic() - sc['t0']:.0f} s")
+        self.status.configure(text="Scanning  ·  " + "  ·  ".join(parts))
+        self.summary.configure(text="")
+
+    def _collected(self, jobs: list, errors: list, ignored: int, paths: list[str]) -> None:
         self._collecting -= 1
-        jobs = [j for j in jobs if j.dst not in self.rows or self.tree.set(self.rows[j.dst], "state") != "Queued"]
+        if not self._collecting:
+            self.scan = None
+            if not self.runner.running:
+                self.progress.set(0, 1)
+        if not self.runner.running and not self.pending:
+            self._reset_list()  # a new drop after a finished run starts a fresh list
+        converting = {dst for dst, iid in self.rows.items() if dst not in self.pending}
+        jobs = [j for j in jobs if j.dst not in self.pending and not (self.runner.running and j.dst in converting)]
         notes = []
         if errors:
             notes.append(f"{len(errors)} unreadable file(s): "
                          + ", ".join(f"{os.path.basename(p)} ({e})" for p, e in errors))
         if ignored:
             notes.append(f"{ignored} unsupported file(s) skipped")
-        if not jobs:
-            self.status.configure(text="  ·  ".join(notes) or "No .sf2 or .sfz file found")
-            if not self.runner.running and not self._collecting:
-                engine.cleanup_temp()
-            return
-        if not self.runner.running:
-            self.total = self.done = self.errors = self.bytes = 0
-            self.w_total = self.w_done = 0
-            self.weights.clear()
-            self.batch.clear()
-            self.root_of.clear()
-            self.t_start, self.deadline = time.monotonic(), 0.0
-            self.tree.delete(*self.tree.get_children())
-            self.rows.clear()
-            self.stripe.clear()
+        self._notes = notes
+        if jobs:
+            self.pending_paths += [p for p in paths if p not in self.pending_paths]
         for j in jobs:
-            out = j.root
-            if out not in self.batch:
-                self.batch[out] = {"before": engine.existing_outputs(out), "results": []}
-            self.root_of[j.dst] = self.last_root = out
             if j.dst in self.rows and self.tree.exists(self.rows[j.dst]):
                 self.tree.delete(self.rows[j.dst])
             stripe = "odd" if len(self.tree.get_children()) % 2 else "even"
@@ -335,17 +394,84 @@ class App:
                                    values=(f"{j.bank} · {j.program}" if j.kind == "sf2"
                                            else "Audio" if j.kind == "copy"
                                            else f"SFZ · {j.program}" if j.program is not None else "SFZ",
-                                           re.sub(r"^\d\d ", "", j.folder), "", "", "Queued"),
+                                           re.sub(r"^\d\d ", "", j.folder), "", "",
+                                           "Replace" if os.path.exists(j.dst) else "New"),
                                    tags=(stripe,))
             self.rows[j.dst], self.stripe[iid] = iid, stripe
-            self.weights[j.dst] = j.weight
-            self.w_total += j.weight
-        self.total += len(jobs)
+            self.pending[j.dst] = j
+        if not self.pending and not self.runner.running:
+            self.status.configure(text="  ·  ".join(notes) or "No .sf2 or .sfz file found")
+            if not self._collecting:
+                engine.cleanup_temp()
+            return
+        if not self.runner.running:
+            self._show_scan()
+
+    def _show_scan(self) -> None:
+        """Status line for the scanned list, waiting for confirmation."""
+        jobs = list(self.pending.values())
+        instruments = sum(j.kind != "copy" for j in jobs)
+        copies = len(jobs) - instruments
+        folders = len({j.root for j in jobs})
+        replace = sum(os.path.exists(j.dst) for j in jobs)
+        parts = [f"Scanned: {instruments} instrument(s)"]
+        if copies:
+            parts.append(f"{copies} unused audio file(s) to copy")
+        parts.append(f"into {folders} library folder(s)")
+        if replace:
+            parts.append(f"{replace} existing file(s) will be replaced")
+        parts += self._notes
+        self.progress.set(0, 1)
+        self.status.configure(text="  ·  ".join(parts))
+        self.summary.configure(text="Click Convert to start")
+        self.convert_btn.state(["!disabled"])
+        self.clear_btn.state(["!disabled"])
+        self.convert_btn.focus_set()
+
+    def _reset_list(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        self.rows.clear()
+        self.stripe.clear()
+        self.pending.clear()
+        self.pending_paths = []
+
+    def _clear(self) -> None:
+        """Forget the scanned list (only while nothing is converting)."""
+        if self.runner.running:
+            return
+        self._reset_list()
+        if not self._collecting:
+            engine.cleanup_temp()  # archives unpacked for the scan
+        self.convert_btn.state(["disabled"])
+        self.clear_btn.state(["disabled"])
+        self.progress.set(0, 1)
+        self.status.configure(text="Ready")
+        self.summary.configure(text="")
+
+    def _convert(self) -> None:
+        """Start converting everything scanned so far."""
+        if self.runner.running or not self.pending or self._collecting:
+            return
+        jobs = list(self.pending.values())
+        self.pending.clear()
+        self.pending_paths = []
+        self.total, self.done, self.errors, self.bytes = len(jobs), 0, 0, 0
+        self.weights = {j.dst: j.weight for j in jobs}
+        self.w_total, self.w_done = sum(self.weights.values()), 0
+        self.batch.clear()
+        self.root_of = {j.dst: j.root for j in jobs}
+        for root in dict.fromkeys(j.root for j in jobs):
+            self.batch[root] = {"before": engine.existing_outputs(root), "results": []}
+        self.last_root = jobs[-1].root
+        for j in jobs:
+            self.tree.set(self.rows[j.dst], "state", "Queued")
+        self.t_start, self.deadline = time.monotonic(), 0.0
         self.runner.submit(jobs)
         self.open_btn.state(["!disabled"])
-        self.dest_btn.state(["disabled"])
+        for btn in (self.convert_btn, self.clear_btn, self.dest_btn):
+            btn.state(["disabled"])
         self.cancel_btn.state(["!disabled"])
-        self._notes = notes
+        self.summary.configure(text="")
         self._update_status()
 
     def _update_status(self, final: str | None = None) -> None:
@@ -366,7 +492,10 @@ class App:
         try:
             while True:
                 kind, payload = self.events.get_nowait()
-                if kind == "collected":
+                if kind == "scan":
+                    if self.scan is not None:
+                        self.scan.update(text=payload[0], done=payload[1], total=payload[2])
+                elif kind == "collected":
                     self._collected(*payload)
                 elif kind == "result":
                     self._show(payload)
@@ -379,6 +508,8 @@ class App:
         self._ticks = getattr(self, "_ticks", 0) + 1
         if self.runner.running and self.deadline and self._ticks % 10 == 0:
             self._update_status()
+        if self._collecting:
+            self._show_scan_progress()  # every tick: moving bar + elapsed time
         self.root.after(100, self._poll)
 
     def _show(self, r: dict) -> None:
@@ -416,8 +547,8 @@ class App:
             for iid in self.tree.get_children():
                 if self.tree.set(iid, "state") == "Queued":
                     self.tree.set(iid, "state", "Cancelled")
-        if not self._collecting:
-            engine.cleanup_temp()  # unpacked archives
+        if not self._collecting and not self.pending:
+            engine.cleanup_temp()  # unpacked archives (kept while a scanned list waits)
         self.cancel_btn.state(["disabled"])
         self.dest_btn.state(["!disabled"])
         elapsed = time.monotonic() - self.t_start
@@ -426,6 +557,8 @@ class App:
         if removed:
             text += f"  ·  {removed} outdated file(s) removed"
         self._update_status(text)
+        if self.pending:  # dropped while converting: waiting for their own confirmation
+            self._show_scan()
 
     def _cancel(self) -> None:
         self.status.configure(text="Cancelling…")
@@ -439,8 +572,13 @@ class App:
                 return
 
     def _quit(self) -> None:
+        self._closing = True  # a running scan stops at its next progress report
         if self.runner.running:
             self.runner.cancel()
+        self.status.configure(text="Closing…")
+        self.root.update_idletasks()
+        for thread in self._scan_threads:
+            thread.join(timeout=10)  # let it stop before its unpacked files are removed
         engine.cleanup_temp()
         self.root.destroy()
 
@@ -450,6 +588,7 @@ def main(initial: list[str]) -> None:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except (AttributeError, OSError):
         pass
+    threading.Thread(target=engine.cleanup_stale_temp, daemon=True).start()  # leftovers of a killed session
     root = TkinterDnD.Tk()
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     icon = os.path.join(base, "icon.ico")

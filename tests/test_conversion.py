@@ -216,6 +216,91 @@ class SFZConversion(Base):
             self.assertTrue(os.path.isfile(self.xrni(name, "11 Synth Lead", "081_lead.xrni")), name)
         self.assertEqual(engine._temp_dirs, [])  # unpacked archives are cleaned up
 
+    def test_scan_reports_unpacking_progress(self):
+        import py7zr
+        src = self.make_library()
+        zpath = shutil.make_archive(os.path.join(self.tmp, "Zipped Set"), "zip", src)
+        spath = os.path.join(self.tmp, "Seven Set.7z")
+        with py7zr.SevenZipFile(spath, "w") as z:
+            z.writeall(src, "Seven Set")
+        for archive in (zpath, spath):
+            events = []
+            jobs, errors, _ = engine.collect_jobs([archive], self.lib,
+                                                  lambda text, d=None, t=None: events.append((text, d, t)))
+            self.assertEqual(errors, [])
+            unpack = [(d, t) for text, d, t in events if text.startswith("Unpacking")]
+            self.assertTrue(unpack, archive)
+            self.assertEqual(unpack[-1][0], unpack[-1][1])  # ends at 100 %
+            self.assertTrue(all(d <= t for d, t in unpack))
+            self.assertTrue(any(text.startswith("Reading") for text, _, _ in events))
+            self.assertEqual(sum(j.kind == "sfz" for j in jobs), 2)
+            engine.cleanup_temp()
+
+    def test_scan_can_be_cancelled_while_unpacking(self):
+        import py7zr
+        src = self.make_library()
+        for archive in (shutil.make_archive(os.path.join(self.tmp, "Zipped Set"), "zip", src),
+                        os.path.join(self.tmp, "Seven Set.7z")):
+            if archive.endswith(".7z"):
+                with py7zr.SevenZipFile(archive, "w") as z:
+                    z.writeall(src, "Seven Set")
+
+            def stop(text, done=None, total=None):
+                if done:  # first data written
+                    raise engine.ScanCancelled()
+
+            with self.assertRaises(engine.ScanCancelled):
+                engine.collect_jobs([archive], self.lib, stop)
+            self.assertEqual(len(engine._temp_dirs), 1)
+            engine.cleanup_temp()  # no file left open: the folder can be removed
+            self.assertEqual(engine._temp_dirs, [])
+
+    def test_archives_unpack_to_the_same_layout_with_every_decoder(self):
+        import py7zr
+        src = self.make_library()
+        expected = sorted(os.path.relpath(os.path.join(r, f), src) for r, _, fs in os.walk(src) for f in fs)
+        archives = [shutil.make_archive(os.path.join(self.tmp, "Zipped"), "zip", src)]
+        solid = os.path.join(self.tmp, "Solid.7z")  # py7zr writes one solid block
+        with py7zr.SevenZipFile(solid, "w") as z:
+            for rel in expected:
+                z.write(os.path.join(src, rel), rel.replace(os.sep, "/"))
+        archives.append(solid)
+        seven = engine.find_7zip()
+        if seven:  # one block per file needs 7-Zip to create
+            import subprocess
+            nonsolid = os.path.join(self.tmp, "NonSolid.7z")
+            subprocess.run([seven, "a", nonsolid, os.path.join(src, "*"), "-ms=off", "-bso0", "-bsp0"],
+                           check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            archives.append(nonsolid)
+        decoders = ["py7zr"] + (["7-Zip"] if engine.find_7zip() else [])
+        for decoder in decoders:
+            old = os.environ.get("S2X_7ZIP")
+            if decoder == "py7zr":
+                os.environ["S2X_7ZIP"] = "off"
+            try:
+                for archive in archives:
+                    out = engine.extract_archive(archive)
+                    got = sorted(os.path.relpath(os.path.join(r, f), out) for r, _, fs in os.walk(out) for f in fs)
+                    got = [g[2:] if g.startswith("." + os.sep) else g for g in got]
+                    self.assertEqual(got, expected, f"{decoder}: {os.path.basename(archive)}")
+                    for rel in expected:
+                        with open(os.path.join(src, rel), "rb") as a, open(os.path.join(out, rel), "rb") as b:
+                            self.assertEqual(a.read(), b.read(), rel)
+                    engine.cleanup_temp()
+            finally:
+                if old is None:
+                    os.environ.pop("S2X_7ZIP", None)
+                else:
+                    os.environ["S2X_7ZIP"] = old
+
+    def test_zip_members_cannot_escape_the_target_folder(self):
+        out = os.path.join(self.tmp, "out")
+        self.assertEqual(engine._safe_member_path(out, "../../evil.txt"), os.path.abspath(os.path.join(out, "evil.txt")))
+        self.assertIsNone(engine._safe_member_path(out, "../.."))
+        self.assertEqual(engine._safe_member_path(out, "C:/Windows/x.dll"),
+                         os.path.abspath(os.path.join(out, "C_", "Windows", "x.dll")))
+        self.assertEqual(engine._safe_member_path(out, "a/../b.wav"), os.path.abspath(os.path.join(out, "a", "b.wav")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,12 +11,15 @@
 
 - **SF2 and SFZ**: every SF2 preset and every `.sfz` file becomes a Renoise instrument.
 - **Drag and drop**: files, folders, `.zip` and `.7z` archives (unpacked automatically), several at once.
+- **Scan first**: see what will be created or replaced, then confirm with **Convert**. Large
+  archives show their unpacking progress while they are scanned.
 - **Straight into Renoise**: instruments land in your Renoise *User Library*, so they show up in
   Renoise's browser right away.
 - **Sorted for you**: General MIDI family folders (Piano, Guitar, Bass, Strings… Drum Kits).
 - **Lossless**: samples are stored as FLAC, as Renoise does itself.
 - **Fast**: one worker process per CPU thread — a 850 MB SoundFont with 1,785 presets converts in about
-  two minutes (disk speed is the limit).
+  two minutes (disk speed is the limit). `.zip` archives are unpacked on every CPU thread, and `.7z`
+  archives use [7-Zip](https://www.7-zip.org/)'s faster decoder when it is installed (optional).
 - **Safe re-runs**: converting again replaces the earlier output and never touches files you added.
 
 ## Download
@@ -33,7 +36,10 @@ No installation needed. Windows 10 or 11 (64-bit).
 1. Start `Soundfont-to-XRNI.exe`.
 2. Drop `.sf2` / `.sfz` files, folders or `.zip` / `.7z` archives on the window (or on the `.exe`
    icon, or click the drop zone to browse).
-3. Open Renoise: the instruments are under **User Library → Instruments → *name***.
+3. Check the scan: the list shows every instrument, its folder and whether it is **New** or will
+   **Replace** an existing file. Nothing has been written yet — drop more files, or **Clear**.
+4. Click **Convert** (or press Enter).
+5. Open Renoise: the instruments are under **User Library → Instruments → *name***.
 
 Output layout (default destination: `Documents\Renoise\User Library\Instruments`, changeable with
 **Change…**):
