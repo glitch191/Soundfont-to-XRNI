@@ -3,7 +3,7 @@
 <h1 align="center">Soundfont-to-XRNI</h1>
 
 <p align="center">Convert SoundFont 2 (<code>.sf2</code>) and SFZ (<code>.sfz</code>) instruments into
-<a href="https://www.renoise.com/">Renoise</a> instruments (<code>.xrni</code>) — drag, drop, done.</p>
+<a href="https://www.renoise.com/">Renoise</a> instruments (<code>.xrni</code>): drag, drop, done.</p>
 
 <p align="center"><img src="docs/screenshot.png" width="760" alt="Soundfont-to-XRNI window"></p>
 
@@ -17,7 +17,7 @@
   Renoise's browser right away.
 - **Sorted for you**: General MIDI family folders (Piano, Guitar, Bass, Strings… Drum Kits).
 - **Lossless**: samples are stored as FLAC, as Renoise does itself.
-- **Fast**: one worker process per CPU thread — a 850 MB SoundFont with 1,785 presets converts in about
+- **Fast**: one worker process per CPU thread: a 850 MB SoundFont with 1,785 presets converts in about
   two minutes (disk speed is the limit). `.zip` archives are unpacked on every CPU thread, and `.7z`
   archives use [7-Zip](https://www.7-zip.org/)'s faster decoder when it is installed (optional).
 - **Safe re-runs**: converting again replaces the earlier output and never touches files you added.
@@ -37,7 +37,7 @@ No installation needed. Windows 10 or 11 (64-bit).
 2. Drop `.sf2` / `.sfz` files, folders or `.zip` / `.7z` archives on the window (or on the `.exe`
    icon, or click the drop zone to browse).
 3. Check the scan: the list shows every instrument, its folder and whether it is **New** or will
-   **Replace** an existing file. Nothing has been written yet — drop more files, or **Clear**.
+   **Replace** an existing file. Nothing has been written yet: drop more files, or **Clear**.
 4. Click **Convert** (or press Enter).
 5. Open Renoise: the instruments are under **User Library → Instruments → *name***.
 
@@ -63,7 +63,7 @@ Instruments\
 program number and an unrecognised name, `18 Other`.
 
 Instruments are sorted by **name first** (Piano, Choir, Bass, Trumpet, Snare…), then by their
-**General MIDI program number**. When the GM family fits the name, it wins — so a GM-conformant bank
+**General MIDI program number**. When the GM family fits the name, it wins: so a GM-conformant bank
 keeps its GM layout and only misnumbered presets move (for example MT-32 / CM-64 banks, or the XG
 sound-effects bank 64). SF2 bank 128 always goes to *Drum Kits*. For SFZ, a numeric file-name prefix
 is read as the program number (`033_fbass.sfz` → 33 → *Bass*), and an SFZ that maps fixed,
@@ -79,9 +79,9 @@ non-pitched sounds across the keyboard is treated as a drum kit.
 | Volume envelope → Renoise AHDSR | ✓ | ✓ (`ampeg_*`) |
 | Exclusive classes / choke groups → mute groups | ✓ | ✓ (`group` / `off_by`) |
 | Stereo | L/R pairs merged into stereo samples | stereo files kept |
-| Release triggers → Note-Off layer | — | ✓ (`trigger=release`) |
-| Round robin → keyzone *Cycle* / *Random* | — | ✓ (`seq_length`, `lorand`/`hirand`) |
-| `#define`, `#include`, `default_path`, `offset`/`end`, `one_shot` | — | ✓ |
+| Release triggers → Note-Off layer |: | ✓ (`trigger=release`) |
+| Round robin → keyzone *Cycle* / *Random* |: | ✓ (`seq_length`, `lorand`/`hirand`) |
+| `#define`, `#include`, `default_path`, `offset`/`end`, `one_shot` |: | ✓ |
 
 Not converted: filters, LFOs / vibrato, modulators and MIDI CC routing (Renoise has no direct
 equivalent per sample), and chorus / reverb sends (they are not stored in the files). Envelope
