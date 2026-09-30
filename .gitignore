@@ -17,3 +17,6 @@ dist/
 *.7z
 *.wav
 *.flac
+
+# Local handoff notes for Claude sessions (describe the owner's PC: keep them out of the repo)
+HANDOFF.md
