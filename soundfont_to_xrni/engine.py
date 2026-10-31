@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import struct
+import sys
 import tempfile
 import threading
 import zipfile
@@ -52,8 +53,16 @@ def documents_dir() -> str:
     return os.path.join(os.path.expanduser("~"), "Documents")
 
 
-# Renoise's default user library: <Documents>\Renoise\User Library\Instruments
-DEFAULT_LIBRARY = os.path.join(documents_dir(), "Renoise", "User Library", "Instruments")
+def default_library() -> str:
+    """Renoise's default user library: <Documents>\\Renoise\\User Library\\Instruments on Windows
+    and macOS, $XDG_DATA_HOME/Renoise/User Library/Instruments (~/.local/share) on Linux."""
+    if sys.platform.startswith("linux"):
+        data = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+        return os.path.join(data, "Renoise", "User Library", "Instruments")
+    return os.path.join(documents_dir(), "Renoise", "User Library", "Instruments")
+
+
+DEFAULT_LIBRARY = default_library()
 OUR_FILE = re.compile(r"^B\d{3}-P\d{3} .*\.xrni$")  # SF2 files this tool writes (safe to replace)
 MANIFEST = ".soundfont-to-xrni"  # per library folder: every .xrni this tool wrote there
 TMP_SUFFIX = ".xrni.tmp"
@@ -681,7 +690,7 @@ def find_7zip() -> str | None:
     for env in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
         if os.environ.get(env):
             candidates.append(os.path.join(os.environ[env], "7-Zip", "7z.exe"))
-    candidates.append(shutil.which("7z") or "")
+    candidates += [shutil.which(name) or "" for name in ("7z", "7zz")]  # 7zz: 7-Zip's Linux / macOS build
     found = next((c for c in candidates if c and os.path.isfile(c)), None)
     _7zip_path.append(found)
     return found
@@ -973,12 +982,14 @@ def _write_manifest(root: str, files: set[str]) -> None:
             if os.path.exists(path):
                 os.remove(path)
             return
-        if os.path.exists(path):
+        windows = sys.platform == "win32"  # elsewhere the leading dot already hides it
+        if windows and os.path.exists(path):
             ctypes.windll.kernel32.SetFileAttributesW(path, 0x80)  # normal, so it can be rewritten
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(files) + "\n")
-        ctypes.windll.kernel32.SetFileAttributesW(path, 0x2)  # hidden
-    except (OSError, AttributeError):
+        if windows:
+            ctypes.windll.kernel32.SetFileAttributesW(path, 0x2)  # hidden
+    except OSError:
         pass
 
 
@@ -1033,8 +1044,11 @@ _open: dict[str, SF2] = {}
 
 def _init_worker() -> None:
     try:
-        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(),
-                                                0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
+        if sys.platform == "win32":
+            ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(),
+                                                    0x4000)  # BELOW_NORMAL_PRIORITY_CLASS
+        else:
+            os.nice(5)
     except (AttributeError, OSError):
         pass
 
