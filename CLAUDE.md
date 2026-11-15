@@ -1,7 +1,9 @@
 # Soundfont-to-XRNI
 
-Windows desktop app that converts SoundFont 2 (`.sf2`) presets and SFZ (`.sfz`) instruments into
+Desktop app that converts SoundFont 2 (`.sf2`) presets and SFZ (`.sfz`) instruments into
 Renoise instruments (`.xrni`), written straight into the user's Renoise User Library.
+Windows is the main target (prebuilt `.exe`); Linux runs from source since PR #2 (contributed).
+Platform-specific code is guarded by `sys.platform` checks; keep Windows behaviour unchanged.
 Public repo: https://github.com/glitch191/Soundfont-to-XRNI (MIT licence).
 
 ## Working with the owner
@@ -61,7 +63,10 @@ Local Python is 3.14; CI uses 3.13. `build.py` keeps PyInstaller's build/ and .s
 Output: `<library>/<sf2 name | sfz folder or archive name>/<family>/<name>.xrni`, plus
 `Samples/` for copied unused audio. Default library: `<Documents>\Renoise\User Library\Instruments`,
 with Documents resolved through `SHGetKnownFolderPath` (follows OneDrive redirection); never hard-code
-a user path.
+a user path. Linux: `$XDG_DATA_HOME/Renoise/User Library/Instruments` (`engine.default_library`),
+settings in `$XDG_CONFIG_HOME/Soundfont-to-XRNI/`. SFZ sample paths fall back to a case-insensitive
+match (`sfz._find_case`) for case-sensitive file systems. Drag and drop does not work under niri
+(`xwayland-satellite` has no DnD bridge); Browse and the CLI do.
 
 ### Replace safety
 
