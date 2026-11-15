@@ -13,7 +13,8 @@ USAGE = """Usage:
 
 PATH: .sf2 / .sfz files, folders containing them, or .zip / .7z archives.
 DIR:  Renoise library "Instruments" folder
-      (default: Documents\\Renoise\\User Library\\Instruments)."""
+      (default: Documents\\Renoise\\User Library\\Instruments;
+      Linux: ~/.local/share/Renoise/User Library/Instruments)."""
 
 
 def _cli(argv: list[str]) -> int:

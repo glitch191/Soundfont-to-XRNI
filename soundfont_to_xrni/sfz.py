@@ -109,8 +109,28 @@ def parse(path: str) -> list[dict]:
     for r in regions:
         if "sample" in r and not r["sample"].startswith("*"):
             rel = (default_path + r["sample"].replace("\\", "/")) if not os.path.isabs(r["sample"]) else r["sample"]
-            r["_path"] = os.path.normpath(os.path.join(base, rel))
+            r["_path"] = _find_case(os.path.normpath(os.path.join(base, rel)))
     return regions
+
+
+def _find_case(path: str) -> str:
+    """``path`` with each missing part replaced by an entry that differs only in letter case:
+    SFZ files made on Windows often spell sample names differently from the files on disk,
+    which a case-sensitive file system (Linux) does not forgive. ``path`` as is if not found."""
+    if os.path.exists(path):
+        return path
+    head, tail = os.path.split(path)
+    if not tail or head == path:
+        return path
+    head = _find_case(head)
+    try:
+        names = os.listdir(head)
+    except OSError:
+        return path
+    if tail in names:
+        return os.path.join(head, tail)
+    low = tail.lower()
+    return next((os.path.join(head, n) for n in names if n.lower() == low), path)
 
 
 def wav_loop(path: str) -> tuple[int, int] | None:

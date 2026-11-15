@@ -31,6 +31,9 @@ No installation needed. Windows 10 or 11 (64-bit).
 > Windows SmartScreen may warn about an unrecognised app the first time, because the executable
 > is not code-signed: click **More info → Run anyway**.
 
+**Linux**: there is no prebuilt download; run it from source, see
+[Run on Linux](#run-on-linux).
+
 ## Usage
 
 1. Start `Soundfont-to-XRNI.exe`.
@@ -41,8 +44,8 @@ No installation needed. Windows 10 or 11 (64-bit).
 4. Click **Convert** (or press Enter).
 5. Open Renoise: the instruments are under **User Library → Instruments → *name***.
 
-Output layout (default destination: `Documents\Renoise\User Library\Instruments`, changeable with
-**Change…**):
+Output layout (default destination: `Documents\Renoise\User Library\Instruments`, or
+`~/.local/share/Renoise/User Library/Instruments` on Linux, changeable with **Change…**):
 
 ```
 Instruments\
@@ -94,11 +97,11 @@ Soundfont-to-XRNI.exe --cli PATH... [--library DIR]
 ```
 
 Converts without opening the window. `PATH`: files, folders or archives; `DIR`: Renoise library
-`Instruments` folder.
+`Instruments` folder. From source (Windows or Linux): `python -m soundfont_to_xrni --cli PATH...`.
 
 ## Run or build from source
 
-Requires Python 3.12+ on Windows.
+Requires Python 3.12+ on Windows or Linux.
 
 ```
 py -m pip install -r requirements.txt
@@ -111,6 +114,28 @@ py build.py                             # dist\Soundfont-to-XRNI.exe + release .
 
 Pushing a version tag (`v1.2.3`) makes GitHub Actions run the tests, build the `.exe` and attach
 it to the release (see `.github/workflows/build.yml`).
+
+### Run on Linux
+
+Python needs Tk (Arch: `tk`; Debian / Ubuntu: `python3-tk`; Fedora: `python3-tkinter`).
+[7-Zip](https://www.7-zip.org/) is optional, as on Windows (`7z` or `7zz` on the `PATH`).
+
+```
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m soundfont_to_xrni                 # the window
+.venv/bin/python -m soundfont_to_xrni --cli PATH...   # no window
+```
+
+- Default destination: `$XDG_DATA_HOME/Renoise/User Library/Instruments`
+  (`~/.local/share/Renoise/User Library/Instruments`), where Renoise keeps its User Library on Linux.
+- Settings are saved in `~/.config/Soundfont-to-XRNI/`.
+- The window is an X11 window (Tk), so on Wayland it runs through Xwayland. Drag and drop from a
+  native Wayland file manager depends on the compositor: those that run Xwayland themselves
+  (GNOME, KDE, Sway) translate it, but niri's `xwayland-satellite` does not (yet). There, click the drop zone to browse, or pass
+  the paths on the command line: `.venv/bin/python -m soundfont_to_xrni PATH...`.
+- SFZ files made on Windows often spell sample names in a different letter case than the files on
+  disk; such samples are still found on a case-sensitive file system.
 
 ## Notes
 

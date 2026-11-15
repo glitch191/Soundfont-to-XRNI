@@ -37,7 +37,8 @@ FONT_THEMES = (
 )
 FONT_SIZE, FONT_SMALL, FONT_TITLE = 11, 10, 14
 
-SETTINGS = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME, "settings.json")
+SETTINGS = os.path.join(os.environ.get("APPDATA") or os.environ.get("XDG_CONFIG_HOME")
+                        or os.path.join(os.path.expanduser("~"), ".config"), APP_NAME, "settings.json")
 
 
 def _size(n: float) -> str:
@@ -568,7 +569,12 @@ class App:
     def _open_out(self) -> None:
         for folder in (self.last_root, self.library):
             if folder and os.path.isdir(folder):
-                os.startfile(folder)
+                if sys.platform == "win32":
+                    os.startfile(folder)
+                else:
+                    import subprocess
+                    subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", folder],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return
 
     def _quit(self) -> None:
@@ -593,7 +599,10 @@ def main(initial: list[str]) -> None:
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     icon = os.path.join(base, "icon.ico")
     try:
-        root.iconbitmap(icon)
+        if sys.platform == "win32":
+            root.iconbitmap(icon)
+        else:  # X11 cannot use a .ico
+            root.iconphoto(True, tk.PhotoImage(master=root, file=os.path.join(base, "docs", "icon.png")))
     except tk.TclError:
         pass
     App(root, initial)
